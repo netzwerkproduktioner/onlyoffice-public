@@ -1,7 +1,7 @@
 #cloud-config
 
 users:
-  - name: JohnDoe # note! the user name is also set in sshd_config, see line 262
+  - name: JohnDoe # note! the user name is also set in sshd_config, see SSH-CONFIGURATION
     groups: users, admin, docker
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
@@ -25,6 +25,7 @@ packages:
     - curl
     - nginx
     - lsb-release
+    - apparmor-utils
 
 package_update: true
 package_upgrade: true    
@@ -218,9 +219,25 @@ write_files:
             - ./files/lib:/var/lib/onlyoffice
             - ./files/database:/var/lib/postgresql            
             - ./files/html:/var/www/onlyoffice/documentserver-example/welcome
+            - ./files/fonts:/usr/share/fonts
           ports:
             - "8008:80"
     defer: true
+
+  - path: /opt/onlyoffice/helper/updater.sh
+    content: |
+      #!/bin/bash 
+      apt-get update && apt-get upgrade -yqq
+      cd /opt/onlyoffice && docker-compose up -d      
+      CONTAINER_NAME=${1:-'onlyoffice'}
+      docker exec ${CONTAINER_NAME} documentserver-prepare4shutdown.sh
+      docker stop ${CONTAINER_NAME}
+      docker pull onlyoffice/documentserver:latest
+      docker-compose build && docker-compose up -d
+      docker system prune --force
+      docker volume prune --force
+    defer: true 
+    permissions: 0640 
 
 runcmd:
     # configure firewall
