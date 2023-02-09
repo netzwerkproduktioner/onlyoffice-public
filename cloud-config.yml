@@ -1,0 +1,324 @@
+#cloud-config
+
+users:
+  - name: JohnDoe # note! the user name is also set in sshd_config, see line 262
+    groups: users, admin, docker
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+    # place your public ssh key here
+    # this key will be set for ssh login
+      - ssh-rsa ABC..XYZ == john.doe@your-domain.test
+
+packages:
+    - ufw
+    - nftables
+    - zip
+    - unzip
+    - build-essential
+    - apt-transport-https 
+    - ca-certificates 
+    - wget 
+    - gnupg
+    - fail2ban
+    - git
+    - curl
+    - nginx
+    - lsb-release
+
+package_update: true
+package_upgrade: true    
+
+write_files:
+  # all requests that not match the subdomains configs will be handled by default  
+  - path: /etc/nginx/sites-available/default
+    content: |
+      # Default server configuration
+      # BNF: !~ String does not match the regular expression
+      server {
+          listen 80;
+          listen [::]:80;
+          server_tokens off; # don't show nginx version on error pages
+
+          # disable all verbs except GET, HEAD, POST
+          if ($request_method !~ ^(GET|HEAD|POST)$) {
+            return 444;
+          }
+
+          server_name _;
+
+          location /.well-known/acme-challenge/ {
+            alias /var/www/acme-challenge/;
+          }
+
+          location / {
+            # redirect (permantly moved) everything to https  
+            return 301 https://$host$request_uri;
+          }
+      }
+    permissions: 0640
+    defer: true
+  
+  # Files in sites-available have to be symlinked to sites-enabled. 
+  # This will be done in the cmd section downstream.  
+  - path: /etc/nginx/sites-available/your-domain.tld
+    content: |
+      # bases on: https://github.com/ONLYOFFICE/document-server-proxy/tree/master/nginx  
+      # LICENSE (origin)
+      # GNU Affero General Public License v3.0
+      # @see: https://github.com/ONLYOFFICE/document-server-proxy/blob/master/LICENSE  
+
+      upstream docservice {
+        server 127.0.0.1:8008;
+      }
+
+      map $http_host $this_host {
+          "" $host;
+          default $http_host;
+      }
+
+      map $http_x_forwarded_proto $the_scheme {
+          default $http_x_forwarded_proto;
+          "" $scheme;
+      }
+
+      map $http_x_forwarded_host $the_host {
+          default $http_x_forwarded_host;
+          "" $this_host;
+      }
+
+      map $http_upgrade $proxy_connection {
+        default upgrade;
+        "" close;
+      }
+
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection $proxy_connection;
+      proxy_set_header X-Forwarded-Host $the_host;
+      proxy_set_header X-Forwarded-Proto $the_scheme;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+      # https://ssl-config.mozilla.org/#server=nginx&version=1.17.7&config=intermediate&openssl=1.1.1k&guideline=5.6
+      server {
+          listen 443 ssl;
+          listen [::]:443 ssl;
+          server_tokens off;
+          root /usr/share/nginx/html;
+          server_name your-domain.tld;
+
+          ## Strong SSL Security
+          ## https://raymii.org/s/tutorials/Strong_SSL_Security_On_nginx.html
+          ssl on;
+          ssl_certificate /var/lib/acme/certs/your-domain.tld/fullchain.pem;
+          ssl_certificate_key /var/lib/acme/certs/your-domain.tld/privkey.pem;
+          ssl_verify_client off;
+
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+          ssl_session_cache shared:SSL:10m;
+          ssl_session_tickets off;
+          ssl_session_timeout 1d;
+
+          ssl_prefer_server_ciphers off;
+
+          ## [Optional] Before enabling Strict-Transport-Security headers, ensure your server is properly configured for SSL.
+          ## This directive informs the browser to always use HTTPS. For more info see:
+          ## - https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Strict-Transport-Security
+          add_header Strict-Transport-Security "max-age=63072000" always;
+          # add_header X-Frame-Options SAMEORIGIN;
+          add_header X-Content-Type-Options nosniff;
+
+          ## [Optional] If your certficate has OCSP, enable OCSP stapling to reduce the overhead and latency of running SSL.
+          ## Replace with your ssl_trusted_certificate. For more info see:
+          ## - https://medium.com/devops-programming/4445f4862461
+          ## - https://www.ruby-forum.com/topic/4419319
+          ## - https://www.digitalocean.com/community/tutorials/how-to-configure-ocsp-stapling-on-apache-and-nginx
+          ssl_stapling on;
+          ssl_stapling_verify on;
+          ssl_trusted_certificate /var/lib/acme/certs/your-domain.tld/chain.pem; #/etc/nginx/ssl/stapling.trusted.crt
+          resolver 213.133.106.251 213.239.204.242 193.47.99.4 185.12.64.1 valid=300s;
+          resolver_timeout 60s;
+
+          ## [Optional] Generate a stronger DHE parameter:
+          ##   cd /etc/ssl/certs
+          ##   sudo openssl dhparam -out dhparam.pem 4096
+          ##
+          ssl_dhparam /var/lib/acme/dhparam/dhparam.pem;
+
+          location / {
+            proxy_pass http://docservice;
+            proxy_http_version 1.1;
+          }
+      }
+    permissions: 0640
+    defer: true
+
+  # the crontab syntax is explained in the crontab file
+  - path: /etc/crontab
+    content: |
+      33 3 * * 0 root /opt/dehydrated/dehydrated --cron > /var/log/dehydrated.log 2>&1 && /etc/init.d/nginx reload
+    append: true
+    defer: true
+
+  # these vars overrides defaults from dehydrated script  
+  - path: /etc/dehydrated/config 
+    content: |
+      CA="letsencrypt"
+      BASEDIR="/var/lib/acme"
+      WELLKNOWN="/var/www/acme-challenge"
+      CONTACT_EMAIL="certs@your-domain.tld"
+    append: false
+    defer: true
+
+  # register all your subdomains in this file.
+  # be aware that you setup nginx config files too.
+  - path: /var/lib/acme/domains.txt
+    content: |
+      your-domain.tld
+    apppend: true
+    defer: true
+
+  # initial params (avoids nginx errors)
+  # new params will be created in the cmd section  
+  - path: /var/lib/acme/dhparam/dhparam.pem
+    content: |
+      -----BEGIN DH PARAMETERS-----
+      MIICCAKCAgEAzrWe6zM165shAzvlpi0zBerrlUUnK5YySJASuuD7UZMRIrI6x1zX
+      h+vtYRoPtiqk4rkUUYgGogy7Lphcu9ARVN5C9gj5ZcvY5SYv05H+Y5rVbJyqj6SC
+      Xq6whyJij2KwNgFC0THiPbUBvB1a0HsHf96ddjfvTDWyAiKEkdPp2umR5wyHO36q
+      EkkklxQUcOBBgI4LwZ58nTKjeWRLXjsnBZO+BPkhLdeJLJbY9HZxPnoD/Y8IEFz5
+      bB3ol2pbUhb1rcrp+Dtiyi2REI5ii46o9mtgm+Ckya1r3fnjApMZsfTPZYmqu/Q3
+      z+P5T8rns+icH7bVWn5HjMOakrl13sLPMjycSgIHVUEk5BZqktBFK9CxeR7g1D5h
+      UDpRxoYUeGA9CfnU+jxWaUtJ37u++fms6+l5/Zqq9zUvgyOZqfKse61okEbTEyfe
+      hKmyu2zubQ2gG20xFWEItZXQ5mXWTMltsAFI3ycPnIlQQyx0ukrhyRTXNEC2f3nH
+      aKx+1L2wmA96Qp4TQjzSEc+9xZfNI6BWZwT3BRf0hc1bUvb29K9piopD9T5XlRVR
+      nS1uA07HBkQfjaeyXQRqMJu3GhXdGW6QBpekpXZDJOs8oTNbstpbTVMOWRR5dSv+
+      mvIcSrqBl98zlQ+Myh/tAG52y8UETIqg2E0Qkiy/vocC4aCn/3IEyKMCAQI=
+      -----END DH PARAMETERS-----
+    defer: true
+
+  # the onlyoffice server runs in a docker container
+  # note the "restart" param, the container will restart after reboot  
+  - path: /opt/onlyoffice/docker-compose.yml
+    content: |
+      version: "3"
+      
+      services:  
+        onlyoffice:
+          # build directly from docker-hub
+          image: onlyoffice/documentserver
+          container_name: onlyoffice
+          restart: unless-stopped
+          environment:
+            - JWT_ENABLED=true
+            - JWT_SECRET={{ your secret }}
+          volumes: 
+            - ./files/data:/var/www/onlyoffice/Data
+            - ./files/logs:/var/log/onlyoffice
+            - ./files/lib:/var/lib/onlyoffice
+            - ./files/database:/var/lib/postgresql            
+            - ./files/html:/var/www/onlyoffice/documentserver-example/welcome
+          ports:
+            - "8008:80"
+    defer: true
+
+runcmd:
+    # configure firewall
+    - [ ufw, default, deny, incoming ]
+    - [ ufw, default, allow, outgoing ]
+    # the default ssh port can be omitted  
+    # - [ ufw, allow, ssh ]
+    - [ ufw, allow, http ]
+    - [ ufw, allow, https ]
+    - [ ufw, allow, 'Nginx HTTP']
+    - [ ufw, allow, 'Nginx Full']
+    # the port 33322 is the 'secret' ssh port
+    - [ ufw, allow, 33322/tcp ]
+    - [ ufw, enable ]
+    # configure fail2ban
+    # @see: https://wiki.ubuntuusers.de/fail2ban/, 
+    # @see: https://community.hetzner.com/tutorials/securing-ssh#step-2---setup-of-fail2ban)
+    - printf "[sshd]\nenabled = true\nbanaction = iptables-multiport\n" > /etc/fail2ban/jail.local
+    - printf "[default]\nbantime = 259200\nmaxretry = 3" >> /etc/fail2ban/jail.local
+    - systemctl enable fail2ban
+    #
+    # SSH-CONFIGURATION
+    # harden ssh (@see: https://community.hetzner.com/tutorials/basic-cloud-config)  
+    - sed -i -e '/^\(#\|\)PermitRootLogin/s/^.*$/PermitRootLogin no/' /etc/ssh/sshd_config
+    - sed -i -e '/^\(#\|\)PasswordAuthentication/s/^.*$/PasswordAuthentication no/' /etc/ssh/sshd_config
+    - sed -i -e '/^\(#\|\)X11Forwarding/s/^.*$/X11Forwarding no/' /etc/ssh/sshd_config
+    - sed -i -e '/^\(#\|\)MaxAuthTries/s/^.*$/MaxAuthTries 3/' /etc/ssh/sshd_config
+    - sed -i -e '/^\(#\|\)AllowTcpForwarding/s/^.*$/AllowTcpForwarding no/' /etc/ssh/sshd_config
+    - sed -i -e '/^\(#\|\)AllowAgentForwarding/s/^.*$/AllowAgentForwarding no/' /etc/ssh/sshd_config
+    - sed -i -e '/^\(#\|\)Port/s/^.*$/Port 33322/' /etc/ssh/sshd_config
+    - sed -i -e '/^\(#\|\)AuthorizedKeysFile/s/^.*$/AuthorizedKeysFile .ssh\/authorized_keys/' /etc/ssh/sshd_config
+    # 
+    # REPLACE JohnDoe WITH YOUR USER NAME SET AT TOP  
+    - sed -i '$a AllowUsers JohnDoe' /etc/ssh/sshd_config
+    # after service restarts the changes will be set  
+    - service sshd restart
+    # prepare OnlyOffice Setup
+    - mkdir /opt/onlyoffice
+    - mkdir /opt/onlyoffice/files
+    - mkdir /opt/onlyoffice/files/html
+    - mkdir /opt/onlyoffice/files/html/css
+    # nginx settings  
+    # symlink available -> enabled
+    - ln -s /etc/nginx/sites-available/your-domain.tld /etc/nginx/sites-enabled/your-domain.tld
+    # *** CUSTOM HTML ***
+    # 
+    # PLEASE: CHANGE THE FOLLOWING LINKS TO YOUR SOURCE/REPO!
+    # get your custom files to override Onlyoffice default html files  
+    # remember: curl -f : fails silenty -o writes source file to destination filename  
+    # docker.html overwrites the default legal-notice file 
+    - curl -fo /opt/onlyoffice/files/html/docker.html "https://raw.githubusercontent.com/netzwerkproduktioner/onlyoffice-public/main/data/html/docker.html"
+    - curl -fo /opt/onlyoffice/files/html/privacy-policy_de.html "https://raw.githubusercontent.com/netzwerkproduktioner/onlyoffice-public/main/data/html/privacy-policy.html"
+    - curl -fo /opt/onlyoffice/files/html/favicon.ico "https://raw.githubusercontent.com/netzwerkproduktioner/onlyoffice-public/main/data/html/css/favicon.ico"
+    - curl -fo /opt/onlyoffice/files/html/css/styles.css "https://raw.githubusercontent.com/netzwerkproduktioner/onlyoffice-public/main/data/html/css/styles.css"
+    # 
+    # *** install custom fonts ***
+    # get fonts from own repo 
+    - mkdir /opt/fonts
+    # store paths for font download into vars 
+    - FONTS_DOWNLOAD_FOLDER=/opt/repo
+    - FONTS_DOWNLOAD_SUBFOLDER=/data/ressources/fonts
+    - FONTS_TEMP_FOLDER=/opt/temp_fontfiles
+    # 
+    # PLEASE: CLONE YOUR FONTS-REPO OR YOUR FONTS SOURCE HERE!    
+    - git clone https://github.com/netzwerkproduktioner/onlyoffice-public.git ${FONTS_DOWNLOAD_FOLDER}
+    # 
+    - mv ${FONTS_DOWNLOAD_FOLDER}/${FONTS_DOWNLOAD_SUBFOLDER} ${FONTS_TEMP_FOLDER}
+    - rm -R ${FONTS_DOWNLOAD_FOLDER}
+    # find all files type = ttf in folder (incl. subfolders) and execute copy to path for each result
+    - find ${FONTS_TEMP_FOLDER}/ -type f -name "*.ttf" -exec cp {} "./opt/fonts/" ";"
+    - find ${FONTS_TEMP_FOLDER}/ -type f -name "*.otf" -exec cp {} "./opt/fonts/" ";"
+    - rm -R ${FONTS_TEMP_FOLDER}
+    # move font files to docker volume path (see above)
+    - mkdir /opt/onlyoffice/files/fonts
+    # font files from this folder are getting sources by volume folder (see docker-compose.yml above)  
+    - mv /opt/fonts /opt/onlyoffice/files/fonts
+    # note, that this command has to run inside the running docker container  
+    - docker-compose exec onlyoffice /bin/bash -c "/usr/bin/documentserver-generate-allfonts.sh"  
+    # ***
+    - service nginx reload && service nginx restart
+    # prepare for SSL/Certifactes  
+    - mkdir /opt/dehydrated
+    - mkdir /var/www/acme-challenge
+    - curl -fo /opt/dehydrated/dehydrated https://raw.githubusercontent.com/dehydrated-io/dehydrated/master/dehydrated
+    - chmod +x /opt/dehydrated/dehydrated
+    - /opt/dehydrated/dehydrated --register --accept-terms
+    - /opt/dehydrated/dehydrated --cron
+    # create fresh dhparams
+    # NOTE! The following procedure can take a long time (~12min on a 'CPX11')      
+    - openssl dhparam -out /var/lib/acme/dhparam/dhparam-strong.pem 4096
+    - mv -f /var/lib/acme/dhparam/dhparam-strong.pem /var/lib/acme/dhparam/dhparam.pem
+    - service nginx reload && service nginx restart
+    # install docker and components  
+    # @see: https://docs.docker.com/engine/install/debian/#install-using-the-repository  
+    - curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    - echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    - apt-get update
+    - apt-get -yqq install docker-ce docker-ce-cli docker-compose
+    - cd /opt/onlyoffice && docker-compose build && docker-compose up -d
+    # restart ufw
+    - service ufw start    

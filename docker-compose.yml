@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+
+  onlyoffice:
+    build: ./environment/docker/onlyoffice
+    image: onlyoffice:v1 
+    container_name: onlyoffice
+    hostname: onlyoffice
+    restart: unless-stopped
+    environment:
+      - JWT_ENABLED=true
+      - JWT_SECRET=***
+    volumes:
+      - ./local/server/onlyoffice/logs:/var/log/onlyoffice:rw
+      - ./local/server/onlyoffice/data:/var/www/onlyoffice/Data:rw
+      - ./local/server/onlyoffice/lib:/var/lib/onlyoffice:rw
+      - ./local/server/onlyoffice/db:/var/lib/postgresql:rw
+      - ./data/html:/var/www/onlyoffice/documentserver-example/welcome/:rw
+    ports:
+      - "8080:80"
