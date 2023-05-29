@@ -252,6 +252,9 @@ runcmd:
     # the port 33322 is the 'secret' ssh port
     - [ ufw, allow, 33322/tcp ]
     - [ ufw, enable ]
+    # set timezone to "Europe/Berlin" 
+    - ln -fs /usr/share/zoneinfo/Europe/Berlin /etc/localtime
+    - dpkg-reconfigure --frontend noninteractive tzdata    
     # configure fail2ban
     # @see: https://wiki.ubuntuusers.de/fail2ban/, 
     # @see: https://community.hetzner.com/tutorials/securing-ssh#step-2---setup-of-fail2ban)
