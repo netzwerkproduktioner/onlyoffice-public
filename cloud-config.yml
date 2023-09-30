@@ -19,13 +19,14 @@ packages:
     - apt-transport-https 
     - ca-certificates 
     - wget 
-    - gnupg
+    - gnupg2
     - fail2ban
     - git
     - curl
     - nginx
     - lsb-release
     - apparmor-utils
+    - debian-archive-keyring
 
 package_update: true
 package_upgrade: true    
@@ -109,7 +110,12 @@ write_files:
 
           ## Strong SSL Security
           ## https://raymii.org/s/tutorials/Strong_SSL_Security_On_nginx.html
-          ssl on;
+          ##
+          ## This directive was made obsolete in version 1.15.0 and was removed in version 1.25.1. 
+          ## The ssl parameter of the listen directive should be used instead. 
+          ## @see: http://nginx.org/en/docs/http/ngx_http_ssl_module.html 
+          # ssl on; 
+          
           ssl_certificate /var/lib/acme/certs/your-domain.tld/fullchain.pem;
           ssl_certificate_key /var/lib/acme/certs/your-domain.tld/privkey.pem;
           ssl_verify_client off;
@@ -282,9 +288,7 @@ runcmd:
     - mkdir /opt/onlyoffice/files
     - mkdir /opt/onlyoffice/files/html
     - mkdir /opt/onlyoffice/files/html/css
-    # nginx settings  
-    # symlink available -> enabled
-    - ln -s /etc/nginx/sites-available/your-domain.tld /etc/nginx/sites-enabled/your-domain.tld
+
     # *** CUSTOM HTML ***
     # 
     # PLEASE: CHANGE THE FOLLOWING LINKS TO YOUR SOURCE/REPO!
@@ -328,6 +332,12 @@ runcmd:
     - chmod +x /opt/dehydrated/dehydrated
     - /opt/dehydrated/dehydrated --register --accept-terms
     - /opt/dehydrated/dehydrated --cron
+
+    # nginx settings  
+    # symlinking from available -> enabled activates the site
+    # be aware doing this after your certs are copied to the dirs (see above, done by dehydrated)  
+    - ln -s /etc/nginx/sites-available/your-domain.tld /etc/nginx/sites-enabled/your-domain.tld
+
     # create fresh dhparams
     # NOTE! The following procedure can take a long time (~12min on a 'CPX11')      
     - openssl dhparam -out /var/lib/acme/dhparam/dhparam-strong.pem 4096
